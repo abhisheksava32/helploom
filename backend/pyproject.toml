@@ -1,0 +1,73 @@
+[project]
+name = "helploom-backend"
+version = "0.1.0"
+description = "Helploom API: document grounded help desk with streaming answers and citations."
+requires-python = ">=3.13"
+dependencies = [
+    "anthropic>=2.3.0",
+    "celery>=5.6.3",
+    "channels>=4.2",
+    "channels-redis>=4.3.0",
+    "daphne>=4.2.3",
+    "dj-database-url>=3.1.2",
+    "django>=5.2,<5.3",
+    "django-cors-headers>=4.9.0",
+    "djangorestframework>=3.18.3",
+    "djangorestframework-simplejwt>=5.5.1",
+    "httpx>=0.28.1",
+    "numpy>=2.5.4",
+    "pgvector>=0.5.1",
+    "psycopg[binary]>=3.2",
+    "pypdf>=6.21.2",
+    "python-docx>=1.2.0",
+    "python-dotenv>=1.2.4",
+    "redis>=8.1.0",
+    "stripe>=16.0.0",
+    "whitenoise>=6.12.0",
+]
+
+[dependency-groups]
+dev = [
+    "django-stubs>=6.1.2",
+    "djangorestframework-stubs>=3.18.1",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-django>=4.14.0",
+    "ruff>=0.17.2",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "helploom.settings"
+python_files = ["test_*.py"]
+testpaths = ["core", "accounts", "knowledge", "assistant", "widget", "billing", "analytics", "evals"]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["ignore::DeprecationWarning:twisted.*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+extend-exclude = ["*/migrations/*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "DJ", "SIM", "RUF"]
+ignore = ["RUF012"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["accounts", "analytics", "assistant", "billing", "core", "evals", "helploom", "knowledge", "widget"]
+
+[tool.mypy]
+python_version = "3.13"
+plugins = ["mypy_django_plugin.main", "mypy_drf_plugin.main"]
+check_untyped_defs = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+exclude = ["migrations/"]
+
+[tool.django-stubs]
+django_settings_module = "helploom.settings"
