@@ -53,7 +53,7 @@ suite runs):
 | Answers | Value |
 | --- | --- |
 | citation accuracy | 97.5% |
-| key fact coverage | 69.0% |
+| key fact coverage | 71.4% |
 | refusal accuracy | 100.0% |
 | retrieval latency | about 7 ms p50 |
 

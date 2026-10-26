@@ -25,7 +25,7 @@ from assistant.providers import (
     TextDelta,
     choose_provider,
 )
-from assistant.providers.extractive import compose_answer
+from assistant.providers.extractive import compose_answer, passage_units
 from assistant.retrieval import Passage
 from knowledge import ollama
 
@@ -60,6 +60,34 @@ def test_extractive_answers_cite_the_sentences_they_use() -> None:
     answer = compose_answer("How long do refunds take?", sources)
 
     assert answer == "Refunds are issued within 5 business days [1]."
+
+
+def test_table_rows_become_readable_units_and_headers_are_skipped() -> None:
+    text = (
+        "Mill M2 error codes\n"
+        "Code | Meaning | What to do\n"
+        "E1 | Motor jam | Clear the burrs.\n"
+        "Standard | 3 to 5 business days | $5.95"
+    )
+
+    assert passage_units(text) == [
+        "Mill M2 error codes",
+        "E1: Motor jam. Clear the burrs.",
+        "Standard: 3 to 5 business days, $5.95",
+    ]
+
+
+def test_extractive_prefers_the_row_that_names_the_asked_identifier() -> None:
+    table = (
+        "Code | Meaning | What to do\n"
+        "E1 | Motor jam | Clear the burrs.\n"
+        "E2 | Motor overheating | Let the grinder cool down for 20 minutes."
+    )
+    sources = [passage(table, title="Equipment care"), passage("We show 10 backup codes once.")]
+
+    answer = compose_answer("My grinder shows error E2, what does it mean?", sources)
+
+    assert answer == "E2: Motor overheating. Let the grinder cool down for 20 minutes [1]."
 
 
 def test_extractive_says_not_found_when_nothing_overlaps() -> None:
