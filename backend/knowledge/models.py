@@ -2,7 +2,8 @@
 
 A Document is one uploaded file. Ingestion extracts its text, splits it into Chunks,
 embeds each chunk and stores the vector next to a generated full-text search vector,
-so one table serves both halves of hybrid search.
+so one table serves both halves of hybrid search. Every ingestion run is recorded as
+an IngestionJob.
 """
 
 from __future__ import annotations
@@ -153,3 +154,49 @@ class Chunk(UUIDModel):
         if not self.organization_id and self.document_id:
             self.organization_id = self.document.organization_id
         super().save(*args, **kwargs)
+
+
+class IngestionStatus(models.TextChoices):
+    RUNNING = "running", "Running"
+    SUCCEEDED = "succeeded", "Succeeded"
+    FAILED = "failed", "Failed"
+
+
+class IngestionTrigger(models.TextChoices):
+    UPLOAD = "upload", "Upload"
+    REINDEX = "reindex", "Re-index"
+    REEMBED = "reembed", "Re-embed"
+
+
+class IngestionJob(TimeStampedModel):
+    """One run of the ingestion pipeline for a document.
+
+    The document only keeps its latest state; jobs keep the history (how long each
+    stage took, which embedder ran, why a run failed), which is what you want when a
+    customer asks why a file never became searchable.
+    """
+
+    organization = models.ForeignKey("accounts.Organization", on_delete=models.CASCADE, related_name="+")
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="ingestion_jobs")
+    trigger = models.CharField(
+        max_length=10, choices=IngestionTrigger.choices, default=IngestionTrigger.UPLOAD
+    )
+    status = models.CharField(max_length=10, choices=IngestionStatus.choices, default=IngestionStatus.RUNNING)
+    embedder = models.CharField(max_length=100, blank=True)
+    chunk_count = models.PositiveIntegerField(default=0)
+    extract_ms = models.PositiveIntegerField(null=True, blank=True)
+    embed_ms = models.PositiveIntegerField(null=True, blank=True)
+    duration_ms = models.PositiveIntegerField(null=True, blank=True)
+    error_message = models.TextField(blank=True, help_text="Friendly reason shown to the user.")
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    objects = OrganizationQuerySet.as_manager()
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["document", "-created_at"], name="knowledge_job_doc_recent"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.trigger} {self.document_id} ({self.status})"

@@ -1,0 +1,60 @@
+KETTLEWICK ACCOUNT AND SECURITY GUIDE
+
+This guide covers signing in, keeping your Kettlewick account safe, and managing or
+deleting your personal data.
+
+Signing in
+
+You sign in with your email address and password. After 5 failed sign-in attempts in
+a row, the account is locked for 15 minutes to protect it from guessing attacks. You
+can still reset your password while the account is locked.
+
+Resetting your password
+
+Choose "Forgot password" on the sign-in page and we email you a reset link. The link
+is valid for 60 minutes and works only once. If it has expired, simply request a new
+one.
+
+Passwords must be at least 12 characters long. We recommend a passphrase of several
+unrelated words, and we block passwords that appear in known data breaches.
+
+Two-step verification
+
+Two-step verification adds a 6-digit code from an authenticator app to every sign-in.
+Turn it on in Settings > Security > Two-step verification and scan the QR code with an
+app such as Google Authenticator, 1Password or Authy.
+
+When you turn it on we show 10 backup codes. Each backup code works once. Store them
+somewhere safe: if you lose your phone and your backup codes, support has to verify
+your identity before removing two-step verification, which can take up to 3 business
+days.
+
+Changing your email address
+
+Change your email in Settings > Profile. We send a confirmation link to the new
+address, and the change only takes effect after you click it. Your old address gets a
+notification, so you will know if someone else tried to change it.
+
+Signing out everywhere
+
+If you think someone else has access to your account, open Settings > Security and
+choose "Sign out of all devices", then change your password.
+
+Phishing and scams
+
+Kettlewick will never ask for your password, your two-step code or your full card
+number by email, chat or phone. If you receive a message like that, do not reply.
+Forward it to security@kettlewick.example and delete it.
+
+Downloading your data
+
+You can request a copy of your personal data in Settings > Privacy > Download my
+data. We prepare a ZIP file with your profile, orders and support conversations and
+email you a download link within 48 hours. The link stays valid for 7 days.
+
+Deleting your account
+
+To delete your account, open Settings > Privacy > Delete account. Any active
+subscription is cancelled first. Deletion is completed within 30 days. We keep order
+and invoice records for 7 years because tax law requires it, but they are no longer
+linked to a profile you can sign in to.
