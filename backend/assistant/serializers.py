@@ -1,6 +1,6 @@
 """Serializers for conversations, messages, citations, feedback and tickets.
 
-Owner: backend-ai. Field names follow docs/API.md, sections "Conversations" and
+Field names follow docs/API.md, sections "Conversations" and
 "Tickets". The websocket frames reuse the same names. Every output field is listed
 explicitly so a new column cannot leak through the API.
 """

@@ -1,5 +1,5 @@
 """Conversation, message feedback, ticket, provider status and retrieval preview
-endpoints. Owner: backend-ai. Contract: docs/API.md, sections "Conversations,
+endpoints. Contract: docs/API.md, sections "Conversations,
 feedback and tickets" and "Assistant".
 
 Questions themselves are asked over ws/chat/ and ws/widget/, not REST. Every view

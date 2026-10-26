@@ -1,4 +1,4 @@
-"""Document library and ingestion. Owner: backend-ai.
+"""Document library and ingestion.
 
 Entry points:
 

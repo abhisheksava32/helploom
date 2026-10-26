@@ -1,4 +1,4 @@
-"""The Django admin pages for the backend-core models load, and staff can add a user with
+"""The Django admin pages for the platform models load, and staff can add a user with
 the email login model (Django's stock user forms assume a username field)."""
 
 from __future__ import annotations

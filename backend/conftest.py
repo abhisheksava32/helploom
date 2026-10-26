@@ -1,5 +1,5 @@
-"""Shared pytest fixtures. Owner: backend-core; app specific fixtures belong in that
-app's tests/conftest.py.
+"""Shared pytest fixtures. App specific fixtures belong in that app's
+tests/conftest.py.
 
 Factories are plain functions rather than a factory library: the models are small and
 explicit setup keeps each test readable.

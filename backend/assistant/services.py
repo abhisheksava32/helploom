@@ -1,9 +1,9 @@
-"""Answer pipeline and conversation services. Owner: backend-ai.
+"""Answer pipeline and conversation services.
 
 Both chat sockets (assistant.consumers.ChatConsumer for the dashboard playground and
 widget.consumers.WidgetConsumer for the public widget) call only the async functions
 in the first half of this module, so their signatures are a contract between the two
-backend owners (docs/DESIGN.md, "Ownership and service interfaces"). The frames they
+backend areas (docs/DESIGN.md, "Module boundaries and service interfaces"). The frames they
 yield are the wire format in docs/API.md, "Chat frames"; consumers forward them
 unchanged.
 

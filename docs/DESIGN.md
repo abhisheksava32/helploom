@@ -16,7 +16,7 @@ Contents
 2. [Architecture](#2-architecture)
 3. [Repository layout](#3-repository-layout)
 4. [Backend conventions](#4-backend-conventions)
-5. [Ownership and service interfaces](#5-ownership-and-service-interfaces)
+5. [Module boundaries and service interfaces](#5-module-boundaries-and-service-interfaces)
 6. [Data model](#6-data-model)
 7. [Request flows](#7-request-flows)
 8. [Retrieval design](#8-retrieval-design)
@@ -134,7 +134,7 @@ helploom/
     src/app/                App Router routes
     src/components/         hand-built UI components
     src/lib/                API client, auth context, websocket hooks, config
-    public/widget.js        the embeddable widget script
+    widget/src/             the embeddable widget (TypeScript, bundled to public/widget.js)
 ```
 
 Every Django app has the same shape:
@@ -197,7 +197,7 @@ views, serializers, consumers, models or signals.
 - **Errors** follow the single shape in API.md. **Lists** are paginated with
   `core.pagination.StandardPagination`.
 - **Migrations.** Each app owns its migrations. Cross-app foreign keys use string
-  references (`"accounts.Organization"`). Never edit another owner's migrations.
+  references (`"accounts.Organization"`). An app never edits another app's migrations.
 - **Tests.** pytest with pytest-django against PostgreSQL (`test_helploom`). Every app
   tests its models, services and views; apps with sockets also test consumers with
   `channels.testing.WebsocketCommunicator`. Shared fixtures (`make_user`,
@@ -211,49 +211,48 @@ views, serializers, consumers, models or signals.
 - **Writing.** Comments explain why, not what. Plain hyphens only in prose and UI
   strings.
 
-## 5. Ownership and service interfaces
+## 5. Module boundaries and service interfaces
 
-Three builders work in parallel. Each changes only its own folders.
+The backend has two areas with a narrow seam between them, so either side can change
+its internals without touching the other.
 
-| Owner | Owns |
-| --- | --- |
-| backend-core | `backend/helploom`, `backend/core`, `backend/accounts`, `backend/widget`, `backend/billing`, `backend/analytics`, `backend/conftest.py`, `backend/pyproject.toml` |
-| backend-ai | `backend/knowledge`, `backend/assistant`, `backend/evals` |
-| frontend | `frontend/` |
+| Area | Apps | Responsibility |
+| --- | --- | --- |
+| platform | `helploom`, `core`, `accounts`, `widget`, `billing`, `analytics` | Tenancy, auth, roles, sockets, rate limits, plans and metering, the widget's public surface, reports |
+| AI | `knowledge`, `assistant`, `evals` | Ingestion, embeddings, retrieval, prompting, providers, the answer pipeline, evaluation |
+| frontend | `frontend/` | Dashboard and the embeddable widget, against the contract in API.md |
 
-A builder that needs a dependency added to `pyproject.toml` asks backend-core (or adds
-it in a commit that touches nothing else).
+The two backend areas meet only at these functions. Their signatures are fixed; the
+bodies are each area's business.
 
-The two backend owners meet only at these functions. Their signatures are fixed; the
-bodies are each owner's business.
-
-| Function | Implemented by | Called by | Contract |
+| Function | Area | Called by | Contract |
 | --- | --- | --- | --- |
-| `billing.services.ensure_document_quota(organization, adding=1)` | backend-core | knowledge uploads | Raises `PlanLimitExceeded` (`limit="documents"`) |
-| `billing.services.ensure_seat_quota(organization, adding=1)` | backend-core | accounts invitations | Raises `PlanLimitExceeded` (`limit="seats"`) |
-| `billing.services.consume_message_quota(organization_id)` | backend-core | `assistant.services.stream_answer`, once per question, before retrieval | Atomic check and increment; raises `PlanLimitExceeded` (`limit="messages"`) |
-| `billing.services.usage_snapshot(organization_id)` | backend-core | billing views | Returns the `UsageSummary` dict |
-| `core.background.run_in_background(func, *args)` | backend-core | knowledge ingestion | After commit; Celery `.delay` when a broker is set, thread pool otherwise; JSON friendly args only |
-| `core.realtime.broadcast_org_event(org_id, event)` and `abroadcast_org_event` | backend-core | knowledge, assistant, billing | Fire and forget; the event dict is the wire frame |
-| `core.ratelimit.ahit`, `scope_client_ip`, `hash_ip` | backend-core | widget consumer | Fixed window counters on the cache |
-| `core.consumers.AuthenticatedJsonConsumer` | backend-core | `assistant.consumers.ChatConsumer` | `auth` frame handshake, `ping`, `send_error`; subclasses implement `handle_message` |
-| `assistant.services.stream_answer(AskRequest)` | backend-ai | chat and widget consumers | Async iterator of chat frames exactly as in API.md; yields an `error` frame instead of raising |
-| `assistant.services.create_handoff_ticket(...)` | backend-ai | chat and widget consumers | Returns the `handoff.created` frame |
-| `assistant.services.record_feedback(...)` | backend-ai | widget consumer | Returns the `feedback.ok` frame |
-| `assistant.services.conversation_history(...)` | backend-ai | widget consumer | Returns the `conversation.history` frame or `None` |
+| `billing.services.ensure_document_quota(organization, adding=1)` | platform | knowledge uploads | Raises `PlanLimitExceeded` (`limit="documents"`) |
+| `billing.services.ensure_seat_quota(organization, adding=1)` | platform | accounts invitations | Raises `PlanLimitExceeded` (`limit="seats"`) |
+| `billing.services.consume_message_quota(organization_id)` | platform | `assistant.services.stream_answer`, once per question, before retrieval | Atomic check and increment; raises `PlanLimitExceeded` (`limit="messages"`) |
+| `billing.services.usage_snapshot(organization_id)` | platform | billing views | Returns the `UsageSummary` dict |
+| `core.background.run_in_background(func, *args)` | platform | knowledge ingestion | After commit; Celery `.delay` when a broker is set, thread pool otherwise; JSON friendly args only |
+| `core.realtime.broadcast_org_event(org_id, event)` and `abroadcast_org_event` | platform | knowledge, assistant, billing | Fire and forget; the event dict is the wire frame |
+| `core.ratelimit.ahit`, `scope_client_ip`, `hash_ip` | platform | widget consumer | Fixed window counters on the cache |
+| `core.consumers.AuthenticatedJsonConsumer` | platform | `assistant.consumers.ChatConsumer` | `auth` frame handshake, `ping`, `send_error`; subclasses implement `handle_message` |
+| `assistant.services.stream_answer(AskRequest)` | AI | chat and widget consumers | Async iterator of chat frames exactly as in API.md; yields an `error` frame instead of raising |
+| `assistant.services.create_handoff_ticket(...)` | AI | chat and widget consumers | Returns the `handoff.created` frame |
+| `assistant.services.record_feedback(...)` | AI | widget consumer | Returns the `feedback.ok` frame |
+| `assistant.services.conversation_history(...)` | AI | widget consumer | Returns the `conversation.history` frame or `None` |
+| `assistant.services.cancel_answer(message_id) -> bool` | AI | chat and widget consumers on `chat.cancel` and disconnect | Asks a streaming answer to stop at its next delta; it then finishes with `message.done` and status `truncated`. Returns `False` when nothing is streaming |
 
-The scaffold already contains these signatures (`backend/assistant/services.py` holds
-`AskRequest`, `VisitorContext` and the stubs), so both owners code against real
-imports from the start.
+`backend/assistant/services.py` defines `AskRequest` and `VisitorContext`, the two
+dataclasses the consumers build, so the socket code depends on plain data rather than
+on the pipeline's internals.
 
 Other cross-app touch points:
 
 - `accounts.services.signup` creates the `billing.Subscription` (Free, demo) and the
-  `widget.WidgetConfig` for the new organisation. All three apps belong to
-  backend-core.
+  `widget.WidgetConfig` for the new organisation in one transaction. All three apps
+  are in the platform area.
 - `analytics` reads `assistant` and `knowledge` tables, read only, through
-  `Model.objects.for_organization(org)`. Field names in section 6 are the contract;
-  backend-ai does not rename them without telling backend-core.
+  `Model.objects.for_organization(org)`. Field names in section 6 are the contract
+  between the two areas.
 - `billing.services.documents_used` counts `knowledge.Document` rows.
 
 ## 6. Data model
@@ -275,6 +274,7 @@ erDiagram
     Organization ||--o{ Document : owns
     Collection |o--o{ Document : groups
     Document ||--o{ Chunk : "split into"
+    Document ||--o{ IngestionJob : "processed by"
     Organization ||--o{ Conversation : owns
     Conversation ||--o{ Message : contains
     Message ||--o{ Citation : cites
@@ -379,13 +379,32 @@ Indexes: (organization, status), (organization, -created_at), GIN(tags).
 | char_start, char_end | int | Offsets into `extracted_text`, for highlighting |
 | token_count | int | Estimated |
 | embedding | vector(768), nullable | pgvector |
-| embedder | char 100 | `hashing-v1` or `ollama:nomic-embed-text`; only chunks of the active embedder are searched |
+| embedder | char 100 | `hashing-v1` or `ollama:nomic-embed-text`; a query only compares vectors from one embedder (see section 8) |
 | search_vector | tsvector, generated | `setweight(to_tsvector('english', heading), 'A') \|\| setweight(to_tsvector('english', text), 'B')`, a stored generated column maintained by PostgreSQL so it can never drift from the text |
 | created_at | datetime | |
 
 Indexes: HNSW on `embedding` with `vector_cosine_ops` (m 16, ef_construction 64),
 GIN on `search_vector`, (organization, document). The first knowledge migration runs
 `VectorExtension()` so new databases (including the test database) get pgvector.
+
+**IngestionJob** (one run of the pipeline; the document keeps only its latest state)
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| id | UUID | |
+| organization | FK Organization | cascade |
+| document | FK Document | cascade |
+| trigger | `upload` \| `reindex` \| `reembed` | What started the run |
+| status | `running` \| `succeeded` \| `failed` | |
+| embedder | char 100 | Embedder used for this run |
+| chunk_count | int | |
+| extract_ms, embed_ms, duration_ms | int, nullable | Stage timings |
+| error_message | text | Friendly reason when failed |
+| finished_at | datetime, nullable | |
+| created_at, updated_at | datetime | |
+
+Index: (document, -created_at). Jobs answer "why did this file never become
+searchable?" without digging through logs.
 
 ### assistant
 
@@ -578,7 +597,11 @@ sequenceDiagram
 ## 8. Retrieval design
 
 Retrieval lives in `assistant/retrieval.py` and reads `knowledge.Chunk`. Every query
-filters `organization_id = <tenant>` and `embedder = <active embedder>` in SQL.
+filters `organization_id = <tenant>` and `embedder = <query embedder>` in SQL. The
+query embedder is the active one, unless the organisation has no ready documents from
+it yet: then it is the embedder that indexed most of its documents
+(`assistant.retrieval.resolve_query_embedder`). Switching `EMBEDDER`, or Ollama coming
+up in auto mode, therefore never empties the answers before `manage.py reembed` runs.
 
 ### Why hybrid
 
@@ -680,8 +703,8 @@ nothing and cannot hallucinate.
 ### Embedders
 
 Both produce 768 dimensions so one `VectorField(dimensions=768)` column holds either.
-Each chunk records its embedder name and queries only compare vectors from the active
-embedder.
+Each chunk records its embedder name and a query only compares vectors from the
+query embedder described above.
 
 | Name | When | How |
 | --- | --- | --- |
@@ -703,7 +726,7 @@ The hashing embedder is a real lexical embedder, not a placeholder:
 - The vector is L2 normalised, so cosine similarity is a dot product.
 
 When the active embedder changes, `GET /assistant/providers/` reports stale documents
-and `uv run python manage.py reembed` re-embeds them (backend-ai owns the command).
+and `uv run python manage.py reembed` re-embeds them.
 
 ## 9. Prompting and citations
 
@@ -887,7 +910,9 @@ database level guarantee is ever required.
 
 - **Auth.** Short lived access JWT kept in memory; refresh token in an httpOnly,
   `SameSite=Lax` cookie scoped to `/api/v1/auth/`, rotated on use with the old token
-  blacklisted. Cookie endpoints require `X-Requested-With`, which forces a CORS
+  blacklisted. A just rotated token stays usable for `REFRESH_REUSE_GRACE_SECONDS`
+  (30), so a reload that cancels the refresh request mid flight does not sign the user
+  out; logout and password changes end that grace at once. Cookie endpoints require `X-Requested-With`, which forces a CORS
   preflight that only the dashboard origin passes: CSRF protection without a token
   dance. Passwords use Django's validators (minimum 10 characters, common and numeric
   checks).
@@ -915,7 +940,7 @@ database level guarantee is ever required.
   exposed in API responses, logs or the provider panel.
 - **Privacy.** Visitor IPs are stored only as keyed HMACs. Errors returned to clients
   never include internals.
-- **Rate limits.** DRF throttles per scope (auth 10/min, uploads 30/min, and so on)
+- **Rate limits.** DRF throttles per scope (auth 10/min, refresh 60/min, uploads 30/min, and so on)
   and cache backed counters for sockets, shared across processes with Redis.
 - **Stripe.** Webhook signatures verified with `STRIPE_WEBHOOK_SECRET`; each event
   processed once.
@@ -946,7 +971,7 @@ database level guarantee is ever required.
 
 ## 15. Evaluation
 
-`backend/evals/` (owner backend-ai) holds:
+`backend/evals/` holds:
 
 - A sample knowledge base: 4 to 6 original support documents for a fictional company
   (for example shipping, returns and refunds, billing and plans, account and security,
@@ -973,7 +998,7 @@ provider it runs offline and deterministically, so it doubles as a regression te
 
 Next.js App Router with TypeScript strict and Tailwind CSS, hand-built components,
 light and dark themes from CSS variables (`src/app/globals.css`), recharts for
-reports. Planned routes:
+reports. Routes:
 
 | Route | Purpose |
 | --- | --- |
@@ -1000,8 +1025,10 @@ reports. Planned routes:
   through `/auth/refresh/`.
 - Websocket hooks reconnect with backoff, re-authenticate, and treat dashboard events
   as cache invalidation hints.
-- `public/widget.js` is dependency free modern JavaScript checked by TypeScript
-  (`// @ts-check` with JSDoc types), so the embed stays small and needs no build step.
+- `frontend/widget/src` is framework free TypeScript bundled by esbuild into
+  `public/widget.js` (built by `npm run dev` and `npm run build`, not committed). It
+  renders inside a Shadow DOM and shares the socket, citation and type modules with
+  the dashboard; the bundle is about 28 KB (9 KB gzipped).
 
 ## 17. Configuration and running
 
@@ -1009,12 +1036,17 @@ Every backend variable is documented in `backend/.env.example`; the frontend's i
 `frontend/.env.example`. Local development:
 
 ```bash
-cp backend/.env.example backend/.env     # then set SECRET_KEY, or keep DEBUG=true
-make install                              # uv sync + npm install
+make install                              # creates backend/.env, uv sync + npm install
 make migrate
+make seed                                 # demo workspace; prints the sign in details
 make dev                                  # backend on :8000, frontend on :3000
 make test                                 # pytest + frontend typecheck, lint and build
 ```
+
+`manage.py seed_demo` (`core/demo.py`) builds the demo workspace through the real
+code paths: the sample knowledge base goes through ingestion, and every example
+conversation is answered by `stream_answer` with the active embedder and provider,
+then spread over the last two weeks so the reports have a shape.
 
 `docker-compose.yml` describes the production shape: PostgreSQL with pgvector, Redis,
 the ASGI backend, a Celery worker, the frontend and Ollama.

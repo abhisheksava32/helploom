@@ -1,6 +1,6 @@
 """Dashboard playground chat socket. Protocol: docs/API.md, "ws/chat/".
 
-Owner: backend-ai. Authentication (the auth frame), ping and the error frame shape
+Authentication (the auth frame), ping and the error frame shape
 come from core.consumers.AuthenticatedJsonConsumer. This consumer runs one answer at
 a time per socket in a background task, so the socket keeps reading frames
 (chat.cancel, ping) while an answer streams, and forwards the frames of

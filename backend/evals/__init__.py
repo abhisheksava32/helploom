@@ -1,4 +1,4 @@
-"""Evaluation harness for retrieval and answers. Owner: backend-ai.
+"""Evaluation harness for retrieval and answers.
 
 A plain package, not a Django app: the sample knowledge base (evals/kb/), the
 question cases (evals/cases.json) and the scoring code live here, and a management

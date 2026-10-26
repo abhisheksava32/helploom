@@ -1,15 +1,13 @@
 # Helploom API contract
 
 This document is the binding contract between the backend and the frontend, and
-between the two backend owners. If an implementation needs to differ from it, change
-this document in the same commit and tell the other owners.
+between the backend's two areas (see DESIGN.md, section 5). An implementation that
+needs to differ from it changes this document in the same commit.
 
-Ownership (each owner changes only its own folders):
-
-| Owner | Folders | Sections in this document |
+| Area | Folders | Sections in this document |
 | --- | --- | --- |
-| backend-core | `backend/core`, `backend/helploom`, `backend/accounts`, `backend/widget`, `backend/billing`, `backend/analytics` | Health, Auth, Invitations, Organization, Widget, Billing, Analytics, `ws/dashboard/`, `ws/widget/` |
-| backend-ai | `backend/knowledge`, `backend/assistant`, `backend/evals` | Documents, Collections, Conversations, Tickets, Assistant, `ws/chat/`, the shared chat frames |
+| platform | `backend/core`, `backend/helploom`, `backend/accounts`, `backend/widget`, `backend/billing`, `backend/analytics` | Health, Auth, Invitations, Organization, Widget, Billing, Analytics, `ws/dashboard/`, `ws/widget/` |
+| AI | `backend/knowledge`, `backend/assistant`, `backend/evals` | Documents, Collections, Conversations, Tickets, Assistant, `ws/chat/`, the shared chat frames |
 | frontend | `frontend/` | Consumes everything below; serves `/widget.js` |
 
 Contents
@@ -165,7 +163,8 @@ the body. A view that answers `401` must keep a JWT authentication class so DRF 
 | --- | --- | --- |
 | `anon` | 60/min per IP | Public endpoints |
 | `user` | 600/min per user | Authenticated endpoints |
-| `auth` | 10/min per IP | Signup, login, refresh, password change, invitation accept |
+| `auth` | 10/min per IP | Signup, login, password change, invitation accept |
+| `refresh` | 60/min per IP | `POST /auth/refresh/` (every page load restores the session once, so it has its own budget) |
 | `upload` | 30/min per user | `POST /documents/` |
 | `webhook` | 120/min per IP | Stripe webhook |
 | `widget` | 120/min per IP | `GET /widget/public/config/` |
@@ -407,6 +406,9 @@ not report a field.
 - `latency_ms`, `first_token_ms`: `null` for user messages.
 - `rating`: `1` (thumbs up), `-1` (thumbs down) or `null`.
 - User messages have `usage` all zeros, `cost_usd` `"0.000000"` and `citations` `[]`.
+- Answers the relevance gate gives without calling a model (`answer_type`
+  `"not_found"` below the threshold) are stored with provider `"extractive"` and model
+  `"relevance-gate"`, so `GET /analytics/costs/` shows that pair as a zero cost row.
 
 ### ConversationSummary
 
@@ -555,7 +557,7 @@ live counts; seats include pending invitations.
 
 ## 3. Health
 
-Owner: backend-core.
+Area: platform.
 
 ### `GET /health/` (public)
 
@@ -571,7 +573,7 @@ Owner: backend-core.
 
 ## 4. Auth
 
-Owner: backend-core. Throttle scope `auth` on signup, login, refresh, password.
+Area: platform. Throttle scope `auth` on signup, login and password; `refresh` on refresh.
 
 ### `POST /auth/signup/` (public)
 
@@ -616,7 +618,13 @@ Header `X-Requested-With: XMLHttpRequest`; no body. Reads the refresh cookie.
 ```
 
 Errors: `401 token_not_valid` (missing, expired or blacklisted cookie; the cookie is
-cleared), `403 csrf_header_missing`.
+cleared), `403 csrf_header_missing`, `429 throttled` (scope `refresh`).
+
+A refresh token is single use, with one exception: for `REFRESH_REUSE_GRACE_SECONDS`
+(30) after it was rotated, the same token is accepted again and gets a fresh pair. A
+page reload can cancel the refresh request after the server rotated but before the
+browser stored the new cookie; without the grace that race would sign the user out.
+Logout and password changes end the grace immediately.
 
 ### `POST /auth/logout/` (public, cookie)
 
@@ -653,7 +661,7 @@ when it fails the validators).
 
 ## 5. Invitations
 
-Owner: backend-core. Invited people open `FRONTEND_URL/invite/<token>`, which calls
+Area: platform. Invited people open `FRONTEND_URL/invite/<token>`, which calls
 these two endpoints. `<token>` is the raw token from the email link.
 
 ### `GET /invitations/<token>/` (public)
@@ -703,7 +711,7 @@ Errors:
 
 ## 6. Organization
 
-Owner: backend-core. All endpoints act on the organisation named by
+Area: platform. All endpoints act on the organisation named by
 `X-Organization-Id`.
 
 ### `GET /organization/` (agent)
@@ -771,7 +779,7 @@ Revokes a pending invitation. `204`. Errors: `409 invitation_not_pending`.
 
 ## 7. Documents and collections
 
-Owner: backend-ai. Status changes are also pushed live on `ws/dashboard/`
+Area: AI. Status changes are also pushed live on `ws/dashboard/`
 (`document.status`, `document.deleted`).
 
 ### `GET /documents/` (agent, paginated)
@@ -799,7 +807,8 @@ Form fields:
 Each file is checked on its own: size up to `MAX_UPLOAD_MB` (20), type sniffed from
 the bytes (PDF, DOCX, Markdown, TXT, HTML; the extension must agree), not empty, not
 a byte for byte duplicate of a document already in the organisation. Accepted files
-are stored and queued for ingestion; the title is the filename without its extension.
+are stored and queued for ingestion; the title is a readable name made from the
+filename (`refund-policy.pdf` becomes `Refund policy`).
 
 `201` when at least one file was accepted:
 
@@ -897,7 +906,7 @@ The collection's documents stay and lose their collection. `204`.
 
 ## 8. Conversations, feedback and tickets
 
-Owner: backend-ai. New conversations and tickets are also pushed on `ws/dashboard/`.
+Area: AI. New conversations and tickets are also pushed on `ws/dashboard/`.
 
 ### `GET /conversations/` (agent, paginated)
 
@@ -968,7 +977,7 @@ Results: `Ticket`.
 
 ## 9. Assistant
 
-Owner: backend-ai. Questions are asked over `ws/chat/` (dashboard playground) or
+Area: AI. Questions are asked over `ws/chat/` (dashboard playground) or
 `ws/widget/` (public), not over REST.
 
 ### `GET /assistant/providers/` (agent)
@@ -1049,7 +1058,7 @@ Runs retrieval only, for the playground's "show sources" view and for tuning.
 
 ## 10. Widget
 
-Owner: backend-core.
+Area: platform.
 
 ### `GET /widget/config/` (agent)
 
@@ -1114,7 +1123,7 @@ The dashboard shows `embed_snippet`; customers paste it before `</body>`:
 <script src="http://localhost:3000/widget.js" data-site-key="hlp_pk_..." data-api-url="http://localhost:8000" data-ws-url="ws://localhost:8000" defer></script>
 ```
 
-`widget.js` (owner: frontend) reads the `data-` attributes, fetches the public
+`widget.js` (frontend) reads the `data-` attributes, fetches the public
 config, renders a floating bubble inside a Shadow DOM root (so the host page's CSS
 cannot leak in or out), and opens `ws/widget/` when the visitor opens the panel. It
 keeps a random `visitor_id` and the last `conversation_id` in `localStorage`.
@@ -1123,7 +1132,7 @@ keeps a random `visitor_id` and the last `conversation_id` in `localStorage`.
 
 ## 11. Billing
 
-Owner: backend-core. Without `STRIPE_SECRET_KEY` the server runs in demo mode:
+Area: platform. Without `STRIPE_SECRET_KEY` the server runs in demo mode:
 checkout switches the plan instantly and the UI labels billing as a demo.
 
 ### `GET /billing/plans/` (public)
@@ -1183,7 +1192,7 @@ After any plan change the server publishes `subscription.updated` on
 
 ## 12. Analytics
 
-Owner: backend-core. All endpoints need the agent role and take `date_from`,
+Area: platform. All endpoints need the agent role and take `date_from`,
 `date_to` (see [Conventions](#filtering-search-and-ordering)) and optionally
 `channel=widget|playground`. "Questions" are user messages; "answers" are assistant
 messages.
@@ -1289,7 +1298,8 @@ The content gap list: questions whose answer was `not_found`, newest first.
 
 Token use and estimated cost by provider and model, from the usage recorded on each
 assistant message and `LLM_PRICING_PER_MTOK` in settings. Local providers cost
-`"0.000000"`.
+`"0.000000"`. Answers from the relevance gate appear as provider `extractive`, model
+`relevance-gate`, at zero cost.
 
 ```json
 {
@@ -1362,19 +1372,19 @@ socket stays open; the client reconnects with a fresh token after its next refre
 
 ### `ws/dashboard/`
 
-Owner: backend-core (`core.consumers.DashboardConsumer`). Read only: after `auth.ok`
+Area: platform (`core.consumers.DashboardConsumer`). Read only: after `auth.ok`
 the server pushes the events in [Real time events](#14-real-time-events) for the
 authenticated organisation. The client sends only `ping`.
 
 ### `ws/chat/`
 
-Owner: backend-ai (`assistant.consumers.ChatConsumer`). The dashboard playground.
+Area: AI (`assistant.consumers.ChatConsumer`). The dashboard playground.
 Authenticate as above, then use the [chat frames](#chat-frames). Playground
 conversations have `channel: "playground"` and `started_by` set to the user.
 
 ### `ws/widget/?site_key=<key>&visitor_id=<id>`
 
-Owner: backend-core (`widget.consumers.WidgetConsumer`). The public website widget.
+Area: platform (`widget.consumers.WidgetConsumer`). The public website widget.
 
 Handshake, in order:
 
@@ -1437,9 +1447,8 @@ Reply `{"type": "feedback.ok", "message_id": "e3f4...", "rating": 1}`.
 
 ### Chat frames
 
-Shared by `ws/chat/` and `ws/widget/`. Owner of the frame shapes and of
-`assistant.services.stream_answer`, which produces them: backend-ai. Both consumers
-forward its frames unchanged.
+Shared by `ws/chat/` and `ws/widget/`. The frames are produced by
+`assistant.services.stream_answer` (AI area); both consumers forward them unchanged.
 
 **Ask a question** (client):
 
@@ -1552,13 +1561,13 @@ event)` (sync, safe from worker threads and Celery) or `abroadcast_org_event`
 
 | Event | Publisher | Payload |
 | --- | --- | --- |
-| `document.status` | knowledge (backend-ai) | `{"type": "document.status", "document": Document}` on every status or chunk count change |
-| `document.deleted` | knowledge (backend-ai) | `{"type": "document.deleted", "document_id": "9e8f..."}` |
-| `conversation.created` | assistant (backend-ai) | `{"type": "conversation.created", "conversation": ConversationSummary}` |
-| `conversation.updated` | assistant (backend-ai) | `{"type": "conversation.updated", "conversation": ConversationSummary}` after each answer or status change |
-| `ticket.created` | assistant (backend-ai) | `{"type": "ticket.created", "ticket": Ticket}` |
-| `ticket.updated` | assistant (backend-ai) | `{"type": "ticket.updated", "ticket": Ticket}` |
-| `subscription.updated` | billing (backend-core) | `{"type": "subscription.updated", "subscription": Subscription}` |
+| `document.status` | knowledge (AI) | `{"type": "document.status", "document": Document}` on every status or chunk count change |
+| `document.deleted` | knowledge (AI) | `{"type": "document.deleted", "document_id": "9e8f..."}` |
+| `conversation.created` | assistant (AI) | `{"type": "conversation.created", "conversation": ConversationSummary}` |
+| `conversation.updated` | assistant (AI) | `{"type": "conversation.updated", "conversation": ConversationSummary}` after each answer or status change |
+| `ticket.created` | assistant (AI) | `{"type": "ticket.created", "ticket": Ticket}` |
+| `ticket.updated` | assistant (AI) | `{"type": "ticket.updated", "ticket": Ticket}` |
+| `subscription.updated` | billing (platform) | `{"type": "subscription.updated", "subscription": Subscription}` |
 
 Delivery is best effort. The dashboard treats events as hints and refetches lists on
 reconnect.
@@ -1569,61 +1578,61 @@ reconnect.
 
 All REST paths are relative to `/api/v1`.
 
-| Method | Path | Role | Owner |
+| Method | Path | Role | Area |
 | --- | --- | --- | --- |
-| GET | `/health/` | public | backend-core |
-| POST | `/auth/signup/` | public | backend-core |
-| POST | `/auth/login/` | public | backend-core |
-| POST | `/auth/refresh/` | public (cookie) | backend-core |
-| POST | `/auth/logout/` | public (cookie) | backend-core |
-| GET, PATCH | `/auth/me/` | any member | backend-core |
-| POST | `/auth/password/` | any member | backend-core |
-| GET | `/invitations/<token>/` | public | backend-core |
-| POST | `/invitations/<token>/accept/` | public or signed in | backend-core |
-| GET | `/organization/` | agent | backend-core |
-| PATCH | `/organization/` | admin | backend-core |
-| GET | `/organization/members/` | agent | backend-core |
-| PATCH | `/organization/members/<id>/` | owner | backend-core |
-| DELETE | `/organization/members/<id>/` | admin (self: any) | backend-core |
-| GET, POST | `/organization/invitations/` | admin | backend-core |
-| POST | `/organization/invitations/<id>/resend/` | admin | backend-core |
-| DELETE | `/organization/invitations/<id>/` | admin | backend-core |
-| GET | `/documents/` | agent | backend-ai |
-| POST | `/documents/` | admin | backend-ai |
-| GET | `/documents/tags/` | agent | backend-ai |
-| GET | `/documents/<id>/` | agent | backend-ai |
-| PATCH, DELETE | `/documents/<id>/` | admin | backend-ai |
-| POST | `/documents/<id>/reindex/` | admin | backend-ai |
-| GET | `/documents/<id>/text/` | agent | backend-ai |
-| GET | `/documents/<id>/chunks/` | agent | backend-ai |
-| GET | `/collections/` | agent | backend-ai |
-| POST | `/collections/` | admin | backend-ai |
-| PATCH, DELETE | `/collections/<id>/` | admin | backend-ai |
-| GET | `/conversations/` | agent | backend-ai |
-| GET, PATCH | `/conversations/<id>/` | agent | backend-ai |
-| POST | `/messages/<id>/feedback/` | agent | backend-ai |
-| GET | `/tickets/` | agent | backend-ai |
-| GET, PATCH | `/tickets/<id>/` | agent | backend-ai |
-| GET | `/assistant/providers/` | agent | backend-ai |
-| POST | `/assistant/search/` | agent | backend-ai |
-| GET | `/widget/config/` | agent | backend-core |
-| PATCH | `/widget/config/` | admin | backend-core |
-| POST | `/widget/config/rotate-key/` | admin | backend-core |
-| GET | `/widget/public/config/` | public (origin checked) | backend-core |
-| GET | `/billing/plans/` | public | backend-core |
-| GET | `/billing/subscription/` | agent | backend-core |
-| POST | `/billing/checkout/` | owner | backend-core |
-| POST | `/billing/portal/` | owner | backend-core |
-| POST | `/billing/webhook/` | public (Stripe signature) | backend-core |
-| GET | `/analytics/overview/` | agent | backend-core |
-| GET | `/analytics/conversations-per-day/` | agent | backend-core |
-| GET | `/analytics/top-questions/` | agent | backend-core |
-| GET | `/analytics/top-documents/` | agent | backend-core |
-| GET | `/analytics/unanswered/` | agent | backend-core |
-| GET | `/analytics/costs/` | agent | backend-core |
+| GET | `/health/` | public | platform |
+| POST | `/auth/signup/` | public | platform |
+| POST | `/auth/login/` | public | platform |
+| POST | `/auth/refresh/` | public (cookie) | platform |
+| POST | `/auth/logout/` | public (cookie) | platform |
+| GET, PATCH | `/auth/me/` | any member | platform |
+| POST | `/auth/password/` | any member | platform |
+| GET | `/invitations/<token>/` | public | platform |
+| POST | `/invitations/<token>/accept/` | public or signed in | platform |
+| GET | `/organization/` | agent | platform |
+| PATCH | `/organization/` | admin | platform |
+| GET | `/organization/members/` | agent | platform |
+| PATCH | `/organization/members/<id>/` | owner | platform |
+| DELETE | `/organization/members/<id>/` | admin (self: any) | platform |
+| GET, POST | `/organization/invitations/` | admin | platform |
+| POST | `/organization/invitations/<id>/resend/` | admin | platform |
+| DELETE | `/organization/invitations/<id>/` | admin | platform |
+| GET | `/documents/` | agent | AI |
+| POST | `/documents/` | admin | AI |
+| GET | `/documents/tags/` | agent | AI |
+| GET | `/documents/<id>/` | agent | AI |
+| PATCH, DELETE | `/documents/<id>/` | admin | AI |
+| POST | `/documents/<id>/reindex/` | admin | AI |
+| GET | `/documents/<id>/text/` | agent | AI |
+| GET | `/documents/<id>/chunks/` | agent | AI |
+| GET | `/collections/` | agent | AI |
+| POST | `/collections/` | admin | AI |
+| PATCH, DELETE | `/collections/<id>/` | admin | AI |
+| GET | `/conversations/` | agent | AI |
+| GET, PATCH | `/conversations/<id>/` | agent | AI |
+| POST | `/messages/<id>/feedback/` | agent | AI |
+| GET | `/tickets/` | agent | AI |
+| GET, PATCH | `/tickets/<id>/` | agent | AI |
+| GET | `/assistant/providers/` | agent | AI |
+| POST | `/assistant/search/` | agent | AI |
+| GET | `/widget/config/` | agent | platform |
+| PATCH | `/widget/config/` | admin | platform |
+| POST | `/widget/config/rotate-key/` | admin | platform |
+| GET | `/widget/public/config/` | public (origin checked) | platform |
+| GET | `/billing/plans/` | public | platform |
+| GET | `/billing/subscription/` | agent | platform |
+| POST | `/billing/checkout/` | owner | platform |
+| POST | `/billing/portal/` | owner | platform |
+| POST | `/billing/webhook/` | public (Stripe signature) | platform |
+| GET | `/analytics/overview/` | agent | platform |
+| GET | `/analytics/conversations-per-day/` | agent | platform |
+| GET | `/analytics/top-questions/` | agent | platform |
+| GET | `/analytics/top-documents/` | agent | platform |
+| GET | `/analytics/unanswered/` | agent | platform |
+| GET | `/analytics/costs/` | agent | platform |
 
-| Socket | Auth | Owner |
+| Socket | Auth | Area |
 | --- | --- | --- |
-| `ws/dashboard/` | `auth` frame, dashboard origin | backend-core |
-| `ws/chat/` | `auth` frame, dashboard origin | backend-ai |
-| `ws/widget/?site_key=&visitor_id=` | site key, allowed origin, IP rate limit | backend-core |
+| `ws/dashboard/` | `auth` frame, dashboard origin | platform |
+| `ws/chat/` | `auth` frame, dashboard origin | AI |
+| `ws/widget/?site_key=&visitor_id=` | site key, allowed origin, IP rate limit | platform |

@@ -1,5 +1,5 @@
-"""Document and collection endpoints. Owner: backend-ai. Contract: docs/API.md,
-section "Documents and collections".
+"""Document and collection endpoints. Contract: docs/API.md, section "Documents and
+collections".
 
 Views stay thin: OrganizationScopedMixin resolves the organisation and role, a
 serializer validates input, one knowledge.services call does the work. Detail views
