@@ -71,12 +71,23 @@ def api_client() -> APIClient:
     return APIClient()
 
 
+def signed_in_client(membership: Membership) -> APIClient:
+    client = APIClient()
+    client.credentials(
+        HTTP_AUTHORIZATION=f"Bearer {access_token_for(membership.user)}",
+        HTTP_X_ORGANIZATION_ID=str(membership.organization_id),
+    )
+    return client
+
+
+@pytest.fixture
+def client_for(db: None) -> Callable[[Membership], APIClient]:
+    """client_for(membership): an API client signed in as that member, in that member's
+    organisation. Handy for role tests: client_for(make_member(org, role="agent"))."""
+    return signed_in_client
+
+
 @pytest.fixture
 def auth_client(owner: Membership) -> APIClient:
     """An API client signed in as the owner, scoped to the owner's organisation."""
-    client = APIClient()
-    client.credentials(
-        HTTP_AUTHORIZATION=f"Bearer {access_token_for(owner.user)}",
-        HTTP_X_ORGANIZATION_ID=str(owner.organization_id),
-    )
-    return client
+    return signed_in_client(owner)

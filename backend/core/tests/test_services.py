@@ -7,9 +7,10 @@ from typing import Any
 import pytest
 from django.core.cache import cache
 from rest_framework import exceptions
+from rest_framework_simplejwt.exceptions import InvalidToken
 
 from core import ratelimit, services
-from core.exceptions import PlanLimitExceeded, exception_handler
+from core.exceptions import Conflict, PlanLimitExceeded, error_frame, exception_handler
 from core.origins import normalize_origin, origin_allowed
 from core.permissions import has_role
 
@@ -114,3 +115,36 @@ def test_hash_ip_is_stable_and_not_the_raw_ip() -> None:
 )
 def test_role_ranking(role: str, minimum: str, allowed: bool) -> None:
     assert has_role(role, minimum) is allowed
+
+
+def test_ipv6_origins_keep_their_brackets() -> None:
+    assert normalize_origin("http://[::1]:3000") == "http://[::1]:3000"
+    assert origin_allowed("http://[::1]:3000/", ["http://[::1]:3000"])
+
+
+def test_error_frames_mirror_the_rest_error_body() -> None:
+    exc = Conflict("Already invited.", code="already_invited", details={"email": "a@example.com"})
+
+    assert error_frame(exc, client_message_id="c-1") == {
+        "type": "error",
+        "code": "already_invited",
+        "message": "Already invited.",
+        "details": {"email": "a@example.com"},
+        "client_message_id": "c-1",
+    }
+
+
+def test_simplejwt_errors_keep_their_code_and_a_readable_message() -> None:
+    status, body = _handle(InvalidToken("Your session has expired."))
+
+    assert status == 401
+    assert body["error"]["code"] == "token_not_valid"
+    assert body["error"]["message"] == "Your session has expired."
+
+
+def test_client_ip_trusts_only_the_configured_proxies(settings: Any) -> None:
+    settings.TRUSTED_PROXY_COUNT = 0
+    assert ratelimit.client_ip_from_headers("10.0.0.1", "203.0.113.9") == "10.0.0.1"
+
+    settings.TRUSTED_PROXY_COUNT = 1
+    assert ratelimit.client_ip_from_headers("10.0.0.1", "198.51.100.7, 203.0.113.9") == "203.0.113.9"

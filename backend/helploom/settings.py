@@ -275,6 +275,10 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.ScopedRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": THROTTLE_RATES,
+    # Without this DRF trusts the whole X-Forwarded-For header, so any client could
+    # pick its own IP and step around the per IP throttles. Set after the proxy
+    # settings below are read.
+    "NUM_PROXIES": None,
     "EXCEPTION_HANDLER": "core.exceptions.exception_handler",
     "TEST_REQUEST_DEFAULT_FORMAT": "json",
 }
@@ -353,7 +357,9 @@ else:
 
 WEBSOCKET_AUTH_TIMEOUT_SECONDS = env_int("WEBSOCKET_AUTH_TIMEOUT_SECONDS", 10)
 # Number of reverse proxies in front of the app whose X-Forwarded-For entries we trust.
+# Shared by DRF throttles and the websocket rate limits (core.ratelimit).
 TRUSTED_PROXY_COUNT = env_int("TRUSTED_PROXY_COUNT", 0)
+REST_FRAMEWORK["NUM_PROXIES"] = TRUSTED_PROXY_COUNT
 
 # Background work. Celery runs only when a broker is configured; otherwise jobs go to an
 # in-process thread pool, which keeps the local setup to PostgreSQL, uv and Node.

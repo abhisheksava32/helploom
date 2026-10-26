@@ -30,6 +30,8 @@ def normalize_origin(value: str | None) -> str | None:
         return None
     if parts.path not in ("", "/"):
         return None
+    if ":" in host:  # urlsplit strips the brackets from IPv6 literals; put them back
+        host = f"[{host}]"
     if port is None or port == _DEFAULT_PORTS[scheme]:
         return f"{scheme}://{host}"
     return f"{scheme}://{host}:{port}"

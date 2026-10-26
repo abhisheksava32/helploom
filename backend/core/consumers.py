@@ -19,10 +19,12 @@ from typing import TYPE_CHECKING, Any
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.conf import settings
+from rest_framework.exceptions import APIException
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.settings import api_settings as jwt_settings
 from rest_framework_simplejwt.tokens import AccessToken
 
+from core.exceptions import error_frame
 from core.origins import origin_allowed, scope_origin
 from core.realtime import org_group, remember_server_loop
 from core.tenancy import resolve_membership
@@ -81,8 +83,16 @@ class JsonWebsocketConsumer(AsyncJsonWebsocketConsumer):
             return
         await self.receive_json(content)
 
-    async def send_error(self, code: str, message: str, **extra: Any) -> None:
-        await self.send_json({"type": "error", "code": code, "message": message, **extra})
+    async def send_error(
+        self, code: str, message: str, details: dict[str, Any] | None = None, **extra: Any
+    ) -> None:
+        await self.send_json(
+            {"type": "error", "code": code, "message": message, "details": details or {}, **extra}
+        )
+
+    async def send_exception(self, exc: APIException, **extra: Any) -> None:
+        """Report a service exception with the same code and details REST would use."""
+        await self.send_json(error_frame(exc, **extra))
 
 
 class AuthenticatedJsonConsumer(JsonWebsocketConsumer):
