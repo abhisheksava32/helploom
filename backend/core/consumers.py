@@ -83,6 +83,12 @@ class JsonWebsocketConsumer(AsyncJsonWebsocketConsumer):
             return
         await self.receive_json(content)
 
+    async def close(self, code: int | bool | None = None, reason: str | None = None) -> None:
+        # daphne's autobahn layer checks type(code) == int, so an IntEnum member crashes
+        # the close and the browser sees 1011 instead of the documented 44xx code.
+        plain = int(code) if code is not None and code is not True else code
+        await super().close(code=plain, reason=reason)
+
     async def send_error(
         self, code: str, message: str, details: dict[str, Any] | None = None, **extra: Any
     ) -> None:

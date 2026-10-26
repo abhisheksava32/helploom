@@ -816,6 +816,7 @@ dependencies = [
 dev = [
     { name = "django-stubs" },
     { name = "djangorestframework-stubs" },
+    { name = "httpx2" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -851,6 +852,7 @@ requires-dist = [
 dev = [
     { name = "django-stubs", specifier = ">=6.1.2" },
     { name = "djangorestframework-stubs", specifier = ">=3.18.1" },
+    { name = "httpx2", specifier = ">=2.16.0" },
     { name = "mypy", specifier = ">=2.4.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },

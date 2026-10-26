@@ -246,8 +246,10 @@ ALLOWED_DOCUMENT_TYPES: dict[str, str] = {
 THROTTLE_RATES: dict[str, str] = {
     "anon": env_str("THROTTLE_ANON", "60/min"),
     "user": env_str("THROTTLE_USER", "600/min"),
-    # Views opt in with throttle_scope = "auth" | "upload" | "webhook" | "widget".
+    # Views opt in with throttle_scope = "auth" | "refresh" | "upload" | "webhook" | "widget".
     "auth": env_str("THROTTLE_AUTH", "10/min"),
+    # Every page load restores the session once, so refresh gets its own, wider budget.
+    "refresh": env_str("THROTTLE_REFRESH", "60/min"),
     "upload": env_str("THROTTLE_UPLOAD", "30/min"),
     "webhook": env_str("THROTTLE_WEBHOOK", "120/min"),
     "widget": env_str("THROTTLE_WIDGET", "120/min"),
@@ -303,6 +305,10 @@ REFRESH_COOKIE_PATH = "/api/v1/auth/"
 REFRESH_COOKIE_DOMAIN = env_str("REFRESH_COOKIE_DOMAIN", "") or None
 REFRESH_COOKIE_SECURE = env_bool("REFRESH_COOKIE_SECURE", not DEBUG)
 REFRESH_COOKIE_SAMESITE = "Lax"
+# A just rotated refresh token is accepted again for this long, so a reload that cancels
+# the refresh request mid flight does not sign the user out. 0 makes tokens strictly
+# single use.
+REFRESH_REUSE_GRACE_SECONDS = env_int("REFRESH_REUSE_GRACE_SECONDS", 30)
 # Cookie authenticated endpoints require this header. Browsers cannot attach a custom
 # header cross origin without a CORS preflight, which only the dashboard passes.
 CSRF_GUARD_HEADER = "X-Requested-With"
@@ -395,8 +401,10 @@ CLAUDE_MODEL = env_str("CLAUDE_MODEL", "claude-opus-5-5")
 CLAUDE_FALLBACK_MODEL = env_str("CLAUDE_FALLBACK_MODEL", "claude-opus-4-8")
 CLAUDE_FALLBACK_BETA = "server-side-fallback-2026-06-01"
 CLAUDE_MAX_TOKENS = env_int("CLAUDE_MAX_TOKENS", 4096)
-# The chat route runs at low effort to keep time to first token down.
-CLAUDE_EFFORT = env_choice("CLAUDE_EFFORT", "low", {"low", "medium", "high", "xhigh", "max"})
+# The chat route runs at low effort to keep time to first token down. The variable is
+# CLAUDE_CHAT_EFFORT, not CLAUDE_EFFORT, because developer tools export the latter and a
+# shell value would silently win over backend/.env.
+CLAUDE_EFFORT = env_choice("CLAUDE_CHAT_EFFORT", "low", {"low", "medium", "high", "xhigh", "max"})
 CLAUDE_TIMEOUT_SECONDS = env_float("CLAUDE_TIMEOUT_SECONDS", 60.0)
 
 # USD per million tokens, used for the cost report. Local providers cost nothing.
@@ -467,6 +475,7 @@ DEFAULT_FROM_EMAIL = env_str("DEFAULT_FROM_EMAIL", "Helploom <no-reply@helploom.
 if TESTING:
     LLM_PROVIDER = "extractive"
     EMBEDDER = "hashing"
+    CLAUDE_EFFORT = "low"
     ANTHROPIC_API_KEY = ""
     STRIPE_SECRET_KEY = ""
     STRIPE_WEBHOOK_SECRET = ""

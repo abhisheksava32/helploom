@@ -59,7 +59,10 @@ async def test_dashboard_socket_rejects_a_bad_token() -> None:
     error = await socket.receive_json_from()
     assert error["type"] == "error"
     assert error["code"] == "authentication_failed"
-    assert (await socket.receive_output())["code"] == CloseCode.UNAUTHENTICATED
+    close = await socket.receive_output()
+    assert close["code"] == CloseCode.UNAUTHENTICATED
+    # daphne rejects IntEnum members, so the close frame must carry a plain int.
+    assert type(close["code"]) is int
 
 
 async def test_dashboard_socket_rejects_foreign_origins() -> None:
@@ -71,6 +74,7 @@ async def test_dashboard_socket_rejects_foreign_origins() -> None:
 
     assert not connected
     assert code == CloseCode.FORBIDDEN
+    assert type(code) is int
 
 
 async def connect_and_auth(membership: Membership) -> WebsocketCommunicator:

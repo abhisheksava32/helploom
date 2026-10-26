@@ -7,7 +7,11 @@ Rules worth knowing:
   subscription and the widget settings in one transaction.
 - Sessions are a short lived access JWT plus a rotating refresh token (stored as an
   httpOnly cookie by the views). A refresh token is single use: rotating blacklists
-  it under a row lock, so a replayed token is refused even under concurrency.
+  it under a row lock, so a replayed token is refused even under concurrency. The one
+  exception is a short reuse grace (REFRESH_REUSE_GRACE_SECONDS) for a token that was
+  just rotated: a page reload can cancel the refresh request after the server rotated
+  but before the browser stored the new cookie, and without the grace that race signs
+  the user out. Logout and password changes end the grace at once.
 - An organisation always keeps at least one owner.
 - Invitation tokens are emailed once and stored only as SHA-256 hashes.
 """
@@ -17,6 +21,7 @@ from __future__ import annotations
 import logging
 import secrets
 import string
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -25,6 +30,7 @@ from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth import password_validation as pv
 from django.contrib.auth.models import update_last_login
+from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import send_mail
 from django.db import IntegrityError, transaction
@@ -164,32 +170,74 @@ def issue_tokens(user: User) -> TokenPair:
     return TokenPair(access=str(refresh.access_token), refresh=str(refresh))
 
 
+class _UncheckedBlacklistRefreshToken(RefreshToken):
+    """Verifies signature, expiry and type but leaves the blacklist to
+    rotate_refresh_token, which checks it under a row lock and applies the reuse grace."""
+
+    def check_blacklist(self) -> None:
+        return None
+
+
+def _rotation_key(jti: str) -> str:
+    return f"auth:refresh-rotated:{jti}"
+
+
+def _revocation_key(user_id: object) -> str:
+    return f"auth:sessions-revoked:{user_id}"
+
+
+def _remember_rotation(jti: str, user_id: object) -> None:
+    grace = settings.REFRESH_REUSE_GRACE_SECONDS
+    if grace > 0:
+        cache.set(_rotation_key(jti), {"user_id": str(user_id), "at": time.time()}, timeout=grace)
+
+
+def _within_reuse_grace(jti: str, user_id: object) -> bool:
+    """True when this blacklisted token was rotated moments ago and no logout or
+    password change happened since."""
+    entry = cache.get(_rotation_key(jti))
+    if not isinstance(entry, dict) or entry.get("user_id") != str(user_id):
+        return False
+    revoked_at = cache.get(_revocation_key(user_id))
+    return revoked_at is None or float(revoked_at) < float(entry["at"])
+
+
+def _end_reuse_grace(user_id: object) -> None:
+    grace = settings.REFRESH_REUSE_GRACE_SECONDS
+    if grace > 0:
+        # Kept a little longer than the grace so it outlives every rotation entry.
+        cache.set(_revocation_key(user_id), time.time(), timeout=grace + 5)
+
+
 def rotate_refresh_token(raw: str | None) -> TokenPair:
     """Exchange a refresh token for a new pair and retire the old one."""
     if not raw:
         raise InvalidToken(SESSION_EXPIRED)
     try:
-        token = RefreshToken(raw)  # type: ignore[arg-type]
+        token = _UncheckedBlacklistRefreshToken(raw)  # type: ignore[arg-type]
     except TokenError as exc:
         raise InvalidToken(SESSION_EXPIRED) from exc
 
+    jti = str(token[jwt_settings.JTI_CLAIM])
     with transaction.atomic():
         # The row lock makes "is it blacklisted?" and "blacklist it" one step, so two
         # requests replaying the same token cannot both get a new session.
         # order_by() drops the model's default ordering by user, an outer join that
         # PostgreSQL refuses to lock.
         outstanding = (
-            OutstandingToken.objects.select_for_update(of=("self",))
-            .filter(jti=token[jwt_settings.JTI_CLAIM])
-            .order_by()
-            .first()
+            OutstandingToken.objects.select_for_update(of=("self",)).filter(jti=jti).order_by().first()
         )
-        if outstanding is None or BlacklistedToken.objects.filter(token=outstanding).exists():
+        if outstanding is None:
             raise InvalidToken(SESSION_EXPIRED)
         user = User.objects.filter(pk=token.get(jwt_settings.USER_ID_CLAIM), is_active=True).first()
         if user is None:
             raise InvalidToken(SESSION_EXPIRED)
+        if BlacklistedToken.objects.filter(token=outstanding).exists():
+            if not _within_reuse_grace(jti, user.pk):
+                raise InvalidToken(SESSION_EXPIRED)
+            return issue_tokens(user)
         BlacklistedToken.objects.create(token=outstanding)
+        _remember_rotation(jti, user.pk)
         return issue_tokens(user)
 
 
@@ -198,9 +246,11 @@ def revoke_refresh_token(raw: str | None) -> None:
     if not raw:
         return
     try:
-        RefreshToken(raw).blacklist()  # type: ignore[arg-type]
+        token = RefreshToken(raw)  # type: ignore[arg-type]
+        token.blacklist()
     except TokenError:
         return
+    _end_reuse_grace(token.get(jwt_settings.USER_ID_CLAIM))
 
 
 def revoke_all_sessions(user: User) -> None:
@@ -210,6 +260,7 @@ def revoke_all_sessions(user: User) -> None:
     BlacklistedToken.objects.bulk_create(
         [BlacklistedToken(token=token) for token in live], ignore_conflicts=True
     )
+    _end_reuse_grace(user.pk)
 
 
 def update_profile(user: User, *, full_name: str | None = None) -> User:

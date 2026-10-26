@@ -104,7 +104,8 @@ def test_login_ignores_a_stale_bearer_token(make_user: Callable[..., User]) -> N
 
 
 @pytest.mark.django_db
-def test_refresh_rotates_the_cookie(api_client: APIClient) -> None:
+def test_refresh_rotates_the_cookie(api_client: APIClient, settings: Any) -> None:
+    settings.REFRESH_REUSE_GRACE_SECONDS = 0
     first_cookie = signup(api_client).cookies[COOKIE].value
 
     response = cookie_post(api_client, "/api/v1/auth/refresh/")
@@ -119,6 +120,20 @@ def test_refresh_rotates_the_cookie(api_client: APIClient) -> None:
     assert replayed.status_code == 401
     assert replayed.json()["error"]["code"] == "token_not_valid"
     assert replayed.cookies[COOKIE].value == ""  # cleared
+
+
+@pytest.mark.django_db
+def test_a_reload_that_lost_the_rotated_cookie_stays_signed_in(api_client: APIClient) -> None:
+    first_cookie = signup(api_client).cookies[COOKIE].value
+    assert cookie_post(api_client, "/api/v1/auth/refresh/").status_code == 200
+
+    # The browser never stored the rotated cookie and sends the old one again.
+    reload = APIClient()
+    reload.cookies[COOKIE] = first_cookie
+    response = cookie_post(reload, "/api/v1/auth/refresh/")
+
+    assert response.status_code == 200
+    assert response.cookies[COOKIE].value not in ("", first_cookie)
 
 
 @pytest.mark.django_db

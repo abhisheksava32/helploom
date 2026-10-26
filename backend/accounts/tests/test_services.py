@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 import pytest
+from django.conf import settings
 from django.core import mail
 from django.utils import timezone
 from rest_framework import exceptions
@@ -80,7 +82,8 @@ def test_login_uses_one_error_for_unknown_email_and_wrong_password(make_user: Ca
 
 
 @pytest.mark.django_db
-def test_refresh_tokens_rotate_and_are_single_use(make_user: Callable[..., User]) -> None:
+def test_refresh_tokens_rotate_and_are_single_use(make_user: Callable[..., User], settings: Any) -> None:
+    settings.REFRESH_REUSE_GRACE_SECONDS = 0
     pair = services.issue_tokens(make_user())
 
     rotated = services.rotate_refresh_token(pair.refresh)
@@ -89,6 +92,53 @@ def test_refresh_tokens_rotate_and_are_single_use(make_user: Callable[..., User]
     with pytest.raises(InvalidToken):
         services.rotate_refresh_token(pair.refresh)  # replay
     assert services.rotate_refresh_token(rotated.refresh).access
+
+
+@pytest.mark.django_db
+def test_a_just_rotated_token_gets_a_short_reuse_grace(make_user: Callable[..., User]) -> None:
+    # A reload can cancel the refresh request after the server rotated; the browser then
+    # sends the old cookie again and must not be signed out.
+    pair = services.issue_tokens(make_user())
+    services.rotate_refresh_token(pair.refresh)
+
+    again = services.rotate_refresh_token(pair.refresh)
+
+    assert again.access
+    assert services.rotate_refresh_token(again.refresh).access
+
+
+@pytest.mark.django_db
+def test_the_reuse_grace_expires(make_user: Callable[..., User], monkeypatch: pytest.MonkeyPatch) -> None:
+    pair = services.issue_tokens(make_user())
+    services.rotate_refresh_token(pair.refresh)
+    later = time.time() + settings.REFRESH_REUSE_GRACE_SECONDS + 1
+    monkeypatch.setattr(time, "time", lambda: later)
+
+    with pytest.raises(InvalidToken):
+        services.rotate_refresh_token(pair.refresh)
+
+
+@pytest.mark.django_db
+def test_logout_ends_the_reuse_grace(make_user: Callable[..., User]) -> None:
+    pair = services.issue_tokens(make_user())
+    rotated = services.rotate_refresh_token(pair.refresh)
+
+    services.revoke_refresh_token(rotated.refresh)
+
+    with pytest.raises(InvalidToken):
+        services.rotate_refresh_token(pair.refresh)
+
+
+@pytest.mark.django_db
+def test_a_password_change_ends_the_reuse_grace(make_user: Callable[..., User]) -> None:
+    user = make_user(password=PASSWORD)
+    pair = services.issue_tokens(user)
+    services.rotate_refresh_token(pair.refresh)
+
+    services.change_password(user, new_password="another long passphrase")
+
+    with pytest.raises(InvalidToken):
+        services.rotate_refresh_token(pair.refresh)
 
 
 @pytest.mark.django_db

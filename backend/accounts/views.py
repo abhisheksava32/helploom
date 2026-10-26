@@ -67,6 +67,7 @@ class LoginView(PublicAuthView):
 
 class RefreshView(PublicAuthView):
     permission_classes = [RequiresCsrfHeader]
+    throttle_scope = "refresh"
 
     def post(self, request: Request) -> Response:
         pair = services.rotate_refresh_token(read_refresh_cookie(request))
