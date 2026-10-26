@@ -1,5 +1,6 @@
 # Development commands. Run from the repository root.
 #   make install   install backend and frontend dependencies
+#   make seed      create the demo workspace (demo@helploom.dev, password printed)
 #   make dev       run the backend (:8000) and the frontend (:3000) together
 #   make test      backend tests plus frontend typecheck, lint and build
 
@@ -18,7 +19,7 @@ ifneq ($(wildcard $(NVM_NODE_BIN)/node),)
 export PATH := $(NVM_NODE_BIN):$(PATH)
 endif
 
-.PHONY: help install env migrate dev backend frontend worker test test-backend test-frontend \
+.PHONY: help install env migrate seed dev backend frontend worker test test-backend test-frontend \
 	lint format typecheck evals reembed superuser check
 
 help: ## Show this list
@@ -37,6 +38,9 @@ env: ## Create backend/.env from the example with a random SECRET_KEY, if missin
 
 migrate: ## Apply database migrations
 	cd $(BACKEND) && uv run python manage.py migrate
+
+seed: ## Create the demo workspace; prints the sign in details (seed ARGS=--reset to rebuild)
+	cd $(BACKEND) && uv run python manage.py seed_demo $(ARGS)
 
 dev: env ## Run backend and frontend together (Ctrl-C stops both)
 	@trap 'kill 0' INT TERM EXIT; \
