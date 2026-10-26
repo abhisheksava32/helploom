@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
+import { ToastProvider } from "@/components/ui/toast";
 import { AuthProvider } from "@/lib/auth/auth-context";
 import { themeInitScript } from "@/lib/theme";
 
@@ -20,6 +21,7 @@ export const viewport: Viewport = {
     { media: "(prefers-color-scheme: light)", color: "#f7f8fb" },
     { media: "(prefers-color-scheme: dark)", color: "#0b0f19" },
   ],
+  colorScheme: "light dark",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -31,7 +33,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body className="min-h-full bg-background text-foreground antialiased">
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <ToastProvider>{children}</ToastProvider>
+        </AuthProvider>
       </body>
     </html>
   );

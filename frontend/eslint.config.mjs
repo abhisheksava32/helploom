@@ -12,7 +12,8 @@ const eslintConfig = defineConfig([
       "@typescript-eslint/consistent-type-imports": "error",
     },
   },
-  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts"]),
+  // public/widget.js is generated from widget/src, which is linted instead.
+  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", "public/widget.js"]),
 ]);
 
 export default eslintConfig;

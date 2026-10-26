@@ -23,7 +23,7 @@ import { ApiError, type ApiClient } from "@/lib/api/client";
 import type { AuthResponse, MeResponse, Organization, User } from "@/lib/api/types";
 import {
   api,
-  getAccessToken,
+  getFreshAccessToken,
   getOrganizationId,
   refreshAccessToken,
   setAccessToken,
@@ -31,8 +31,13 @@ import {
 } from "@/lib/auth/session";
 
 const ACTIVE_ORG_KEY = "helploom.activeOrganization";
+/** Set while this browser has a session, so public pages can skip the refresh probe. */
+const SESSION_HINT_KEY = "helploom.signedIn";
 
-export type AuthStatus = "loading" | "authenticated" | "anonymous";
+/** "unavailable": the server could not be reached to restore the session (it may still be valid). */
+export type AuthStatus = "loading" | "authenticated" | "anonymous" | "unavailable";
+/** Why the session could not be restored: rate limited, or no usable answer from the server. */
+export type UnavailableReason = "throttled" | "unreachable";
 
 export interface SignupInput {
   email: string;
@@ -43,6 +48,8 @@ export interface SignupInput {
 
 export interface AuthContextValue {
   status: AuthStatus;
+  /** Set while status is "unavailable". */
+  unavailableReason: UnavailableReason | null;
   user: User | null;
   organizations: Organization[];
   organization: Organization | null;
@@ -55,6 +62,8 @@ export interface AuthContextValue {
   switchOrganization: (organizationId: string) => void;
   /** Reload the user and organisations, for example after renaming the workspace. */
   reload: () => Promise<void>;
+  /** Try to restore the session again after "unavailable". */
+  retry: () => void;
   /** For websocket auth frames: the current token, refreshed when it is missing. */
   getAccessToken: () => Promise<string | null>;
 }
@@ -78,18 +87,38 @@ function storeOrganization(organizationId: string | null): void {
   }
 }
 
+function readSessionHint(): boolean {
+  try {
+    return window.localStorage.getItem(SESSION_HINT_KEY) === "1";
+  } catch {
+    // Unknown when storage is blocked, so always ask the server.
+    return true;
+  }
+}
+
+function storeSessionHint(signedIn: boolean): void {
+  try {
+    if (signedIn) window.localStorage.setItem(SESSION_HINT_KEY, "1");
+    else window.localStorage.removeItem(SESSION_HINT_KEY);
+  } catch {
+    // Without storage every page simply asks the server.
+  }
+}
+
 function pickOrganization(organizations: Organization[], preferredId: string | null): Organization | null {
   return organizations.find((org) => org.id === preferredId) ?? organizations[0] ?? null;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading");
+  const [unavailableReason, setUnavailableReason] = useState<UnavailableReason | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [organizationId, setOrganizationId] = useState<string | null>(null);
 
   const clearSession = useCallback(() => {
     setAccessToken(null);
+    storeSessionHint(false);
     setUser(null);
     setOrganizations([]);
     setStatus("anonymous");
@@ -99,6 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const active = pickOrganization(nextOrganizations, getOrganizationId() ?? readStoredOrganization());
     setSessionOrganization(active?.id ?? null);
     storeOrganization(active?.id ?? null);
+    storeSessionHint(true);
     setUser(nextUser);
     setOrganizations(nextOrganizations);
     setOrganizationId(active?.id ?? null);
@@ -118,27 +148,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     applySession(me.user, me.organizations);
   }, [applySession]);
 
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let cancelled = false;
     async function restore() {
-      const token = await refreshAccessToken();
-      if (cancelled) return;
-      if (!token) {
+      // A browser that never signed in has no refresh cookie. Public pages skip the
+      // probe for it, which saves a request (and an expected 401) per page view and
+      // spares the per IP auth throttle. Dashboard routes always ask, so a session
+      // survives cleared storage.
+      if (!readSessionHint() && !window.location.pathname.startsWith("/app")) {
         clearSession();
         return;
       }
       try {
+        const token = await refreshAccessToken();
+        if (cancelled) return;
+        if (!token) {
+          clearSession();
+          return;
+        }
         const me = await api.get<MeResponse>("/auth/me/");
         if (!cancelled) applySession(me.user, me.organizations);
-      } catch {
-        if (!cancelled) clearSession();
+      } catch (error) {
+        if (cancelled) return;
+        // A 401 here means the fresh token was refused: the session is over. Anything
+        // else (offline, throttled, server down) keeps the cookie for a retry.
+        if (error instanceof ApiError && error.status === 401) {
+          clearSession();
+          return;
+        }
+        setUnavailableReason(error instanceof ApiError && error.code === "throttled" ? "throttled" : "unreachable");
+        setStatus("unavailable");
       }
     }
     void restore();
     return () => {
       cancelled = true;
     };
-  }, [applySession, clearSession]);
+  }, [applySession, clearSession, attempt]);
+
+  const retry = useCallback(() => {
+    setUnavailableReason(null);
+    setStatus("loading");
+    setAttempt((value) => value + 1);
+  }, []);
 
   const login = useCallback(
     async (email: string, password: string) => {
@@ -182,14 +235,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOrganizationId(id);
   }, []);
 
-  const getFreshAccessToken = useCallback(
-    async () => getAccessToken() ?? (await refreshAccessToken()),
-    [],
-  );
-
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
+      unavailableReason,
       user,
       organizations,
       organization: organizations.find((org) => org.id === organizationId) ?? null,
@@ -200,10 +249,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       switchOrganization,
       reload,
+      retry,
       getAccessToken: getFreshAccessToken,
     }),
     [
       status,
+      unavailableReason,
       user,
       organizations,
       organizationId,
@@ -213,7 +264,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       switchOrganization,
       reload,
-      getFreshAccessToken,
+      retry,
     ],
   );
 

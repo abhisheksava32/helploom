@@ -20,6 +20,9 @@
 # production
 /build
 
+# generated from widget/src by npm run widget:build
+/public/widget.js
+
 # misc
 .DS_Store
 *.pem

@@ -1,10 +1,10 @@
 /**
- * The only module that calls fetch for the REST API (docs/API.md).
+ * The only module that talks HTTP to the REST API (docs/API.md).
  *
  * It adds the bearer token and the X-Organization-Id header, turns the error body
  * into a typed ApiError, and on a 401 with an expired token refreshes once and
- * retries. Session state stays in the auth context; the client reads it through
- * callbacks so it always sees the latest token.
+ * retries. Session state stays in lib/auth; the client reads it through callbacks so
+ * it always sees the latest token.
  */
 
 import { apiBase } from "@/lib/config";
@@ -46,8 +46,21 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** Send the bearer token and organisation header (default true). */
   auth?: boolean;
-  /** Cookie endpoints (/auth/refresh/, /auth/logout/): send credentials and the CSRF guard header. */
+  /** Cookie endpoints (/auth/refresh/, /auth/logout/, login, signup): send credentials and the CSRF guard header. */
   cookie?: boolean;
+  /**
+   * Bearer endpoints whose response sets a new refresh cookie (POST /auth/password/
+   * rotates it). Without credentials the browser would drop that Set-Cookie and keep
+   * the revoked one, ending the session at the next refresh.
+   */
+  withCredentials?: boolean;
+}
+
+export interface UploadOptions {
+  query?: RequestOptions["query"];
+  signal?: AbortSignal;
+  /** Called with 0..1 as the request body is sent. */
+  onProgress?: (fraction: number) => void;
 }
 
 export interface ApiClientOptions {
@@ -57,12 +70,16 @@ export interface ApiClientOptions {
   refreshAccessToken: () => Promise<string | null>;
 }
 
+type NoBody = Omit<RequestOptions, "method" | "body">;
+
 export interface ApiClient {
   request<T>(path: string, options?: RequestOptions): Promise<T>;
-  get<T>(path: string, options?: Omit<RequestOptions, "method" | "body">): Promise<T>;
-  post<T>(path: string, body?: unknown, options?: Omit<RequestOptions, "method" | "body">): Promise<T>;
-  patch<T>(path: string, body: unknown, options?: Omit<RequestOptions, "method" | "body">): Promise<T>;
-  delete(path: string, options?: Omit<RequestOptions, "method" | "body">): Promise<void>;
+  get<T>(path: string, options?: NoBody): Promise<T>;
+  post<T>(path: string, body?: unknown, options?: NoBody): Promise<T>;
+  patch<T>(path: string, body: unknown, options?: NoBody): Promise<T>;
+  delete(path: string, options?: NoBody): Promise<void>;
+  /** Multipart POST with upload progress (fetch cannot report request progress). */
+  upload<T>(path: string, formData: FormData, options?: UploadOptions): Promise<T>;
 }
 
 export function buildUrl(path: string, query?: RequestOptions["query"]): string {
@@ -85,6 +102,15 @@ function isErrorBody(value: unknown): value is ApiErrorBody {
   return typeof error === "object" && error !== null && "code" in error && "message" in error;
 }
 
+function errorFromBody(status: number, parsed: unknown): ApiError {
+  if (isErrorBody(parsed)) {
+    const { code, message, details } = parsed.error;
+    return new ApiError(status, code, message, details ?? {});
+  }
+  if (status === 429) return new ApiError(status, "throttled", "Too many requests. Please wait a moment.");
+  return new ApiError(status, "server_error", "Something went wrong. Please try again.");
+}
+
 async function toApiError(response: Response): Promise<ApiError> {
   let parsed: unknown = null;
   try {
@@ -92,14 +118,25 @@ async function toApiError(response: Response): Promise<ApiError> {
   } catch {
     // Not JSON, for example a proxy error page.
   }
-  if (isErrorBody(parsed)) {
-    const { code, message, details } = parsed.error;
-    return new ApiError(response.status, code, message, details ?? {});
-  }
-  return new ApiError(response.status, "server_error", "Something went wrong. Please try again.");
+  return errorFromBody(response.status, parsed);
+}
+
+const networkError = () =>
+  new ApiError(0, "network_error", "Cannot reach the Helploom server. Check your connection.");
+
+function isExpiredToken(error: ApiError): boolean {
+  return error.status === 401 && (error.code === "token_not_valid" || error.code === "not_authenticated");
 }
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
+  function authHeaders(accessToken: string | null): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const organizationId = options.getOrganizationId();
+    if (organizationId) headers["X-Organization-Id"] = organizationId;
+    return headers;
+  }
+
   async function send(path: string, request: RequestOptions, accessToken: string | null): Promise<Response> {
     const headers = new Headers({ Accept: "application/json" });
     let body: BodyInit | undefined;
@@ -111,9 +148,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       body = JSON.stringify(request.body);
     }
     if (request.auth !== false) {
-      if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
-      const organizationId = options.getOrganizationId();
-      if (organizationId) headers.set("X-Organization-Id", organizationId);
+      for (const [name, value] of Object.entries(authHeaders(accessToken))) headers.set(name, value);
     }
     if (request.cookie) headers.set("X-Requested-With", "XMLHttpRequest");
 
@@ -123,11 +158,11 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         headers,
         body,
         signal: request.signal,
-        credentials: request.cookie ? "include" : "omit",
+        credentials: request.cookie || request.withCredentials ? "include" : "omit",
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") throw error;
-      throw new ApiError(0, "network_error", "Cannot reach the Helploom server. Check your connection.");
+      throw networkError();
     }
   }
 
@@ -136,7 +171,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
     if (response.status === 401 && requestOptions.auth !== false && !requestOptions.cookie) {
       const error = await toApiError(response.clone());
-      if (error.code === "token_not_valid" || error.code === "not_authenticated") {
+      if (isExpiredToken(error)) {
         const fresh = await options.refreshAccessToken();
         if (fresh) response = await send(path, requestOptions, fresh);
       }
@@ -147,15 +182,50 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     return (await response.json()) as T;
   }
 
-  type NoBody = Omit<RequestOptions, "method" | "body">;
+  function sendUpload<T>(path: string, formData: FormData, accessToken: string | null, upload: UploadOptions) {
+    return new Promise<T>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", buildUrl(path, upload.query));
+      xhr.setRequestHeader("Accept", "application/json");
+      for (const [name, value] of Object.entries(authHeaders(accessToken))) xhr.setRequestHeader(name, value);
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) upload.onProgress?.(event.loaded / event.total);
+      };
+      xhr.onload = () => {
+        let parsed: unknown = null;
+        try {
+          parsed = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+        } catch {
+          // Leave parsed as null; errorFromBody falls back to a generic message.
+        }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(parsed as T);
+        else reject(errorFromBody(xhr.status, parsed));
+      };
+      xhr.onerror = () => reject(networkError());
+      xhr.onabort = () => reject(new DOMException("Upload cancelled.", "AbortError"));
+      upload.signal?.addEventListener("abort", () => xhr.abort(), { once: true });
+      xhr.send(formData);
+    });
+  }
+
+  async function uploadWithRefresh<T>(path: string, formData: FormData, upload: UploadOptions = {}): Promise<T> {
+    try {
+      return await sendUpload<T>(path, formData, options.getAccessToken(), upload);
+    } catch (error) {
+      if (!(error instanceof ApiError) || !isExpiredToken(error)) throw error;
+      const fresh = await options.refreshAccessToken();
+      if (!fresh) throw error;
+      upload.onProgress?.(0);
+      return sendUpload<T>(path, formData, fresh, upload);
+    }
+  }
 
   return {
     request,
     get: <T>(path: string, opts?: NoBody) => request<T>(path, { ...opts, method: "GET" }),
-    post: <T>(path: string, body?: unknown, opts?: NoBody) =>
-      request<T>(path, { ...opts, method: "POST", body }),
-    patch: <T>(path: string, body: unknown, opts?: NoBody) =>
-      request<T>(path, { ...opts, method: "PATCH", body }),
+    post: <T>(path: string, body?: unknown, opts?: NoBody) => request<T>(path, { ...opts, method: "POST", body }),
+    patch: <T>(path: string, body: unknown, opts?: NoBody) => request<T>(path, { ...opts, method: "PATCH", body }),
     delete: (path: string, opts?: NoBody) => request<void>(path, { ...opts, method: "DELETE" }),
+    upload: uploadWithRefresh,
   };
 }

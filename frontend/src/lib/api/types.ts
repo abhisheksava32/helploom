@@ -152,6 +152,11 @@ export interface DocumentText {
   truncated: boolean;
 }
 
+export interface TagCount {
+  tag: string;
+  count: number;
+}
+
 export interface Chunk {
   id: Uuid;
   ordinal: number;
@@ -350,6 +355,83 @@ export interface CheckoutResult {
   subscription: Subscription;
 }
 
+// Analytics (docs/API.md, section 12)
+
+export interface ReportOverview {
+  date_from: DateString;
+  date_to: DateString;
+  conversations: number;
+  questions: number;
+  answered: number;
+  not_found: number;
+  refused: number;
+  errors: number;
+  answer_rate: number;
+  not_found_rate: number;
+  ratings: { up: number; down: number; average: number | null; satisfaction: number | null };
+  avg_latency_ms: number | null;
+  avg_first_token_ms: number | null;
+  tickets_opened: number;
+  cost_usd: MoneyString;
+}
+
+export interface DailyPoint {
+  date: DateString;
+  conversations: number;
+  questions: number;
+  answered: number;
+  not_found: number;
+}
+
+export interface DailyReport {
+  date_from: DateString;
+  date_to: DateString;
+  results: DailyPoint[];
+}
+
+export interface TopQuestion {
+  question: string;
+  count: number;
+  answered: number;
+  not_found: number;
+  last_asked_at: Timestamp;
+}
+
+export interface TopDocument {
+  document_id: Uuid | null;
+  title: string;
+  citations: number;
+  answers: number;
+}
+
+export interface UnansweredQuestion {
+  message_id: Uuid;
+  conversation_id: Uuid;
+  question: string;
+  channel: Channel;
+  asked_at: Timestamp;
+  top_similarity: number | null;
+  has_ticket: boolean;
+}
+
+export interface CostRow {
+  provider: ProviderName;
+  model: string;
+  messages: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  cost_usd: MoneyString;
+}
+
+export interface CostReport {
+  date_from: DateString;
+  date_to: DateString;
+  results: CostRow[];
+  total_cost_usd: MoneyString;
+}
+
 // Websocket frames (docs/API.md, section 13)
 
 export interface ErrorFrame {
@@ -403,6 +485,41 @@ export interface HandoffCreatedFrame {
   ticket: { id: Uuid; conversation_id: Uuid; status: TicketStatus; created_at: Timestamp };
 }
 
+/** Widget only: sent after the handshake on ws/widget/. */
+export interface SessionReadyFrame {
+  type: "session.ready";
+  visitor_id: string;
+  organization_name: string;
+  title: string;
+  greeting: string;
+  brand_color: string;
+  position: WidgetPosition;
+}
+
+export interface HistoryMessage {
+  id: Uuid;
+  role: MessageRole;
+  content: string;
+  answer_type: AnswerType | "";
+  rating: Rating | null;
+  citations: Citation[];
+  created_at: Timestamp;
+}
+
+/** Widget only: the reply to conversation.resume. */
+export interface ConversationHistoryFrame {
+  type: "conversation.history";
+  conversation_id: Uuid;
+  status: ConversationStatus;
+  messages: HistoryMessage[];
+}
+
+export interface FeedbackOkFrame {
+  type: "feedback.ok";
+  message_id: Uuid;
+  rating: Rating | null;
+}
+
 export type ChatServerFrame =
   | MessageStartFrame
   | MessageDeltaFrame
@@ -426,6 +543,17 @@ export type ChatClientFrame =
   | { type: "handoff.request"; conversation_id: Uuid; email: string; name?: string; note?: string }
   | { type: "ping" };
 
+export type WidgetServerFrame =
+  | ChatServerFrame
+  | SessionReadyFrame
+  | ConversationHistoryFrame
+  | FeedbackOkFrame;
+
+export type WidgetClientFrame =
+  | Exclude<ChatClientFrame, { type: "auth" }>
+  | { type: "conversation.resume"; conversation_id: Uuid }
+  | { type: "feedback"; message_id: Uuid; rating: Rating | null; comment?: string };
+
 export type DashboardEvent =
   | { type: "document.status"; document: HelpDocument }
   | { type: "document.deleted"; document_id: Uuid }
@@ -434,3 +562,5 @@ export type DashboardEvent =
   | { type: "ticket.created"; ticket: Ticket }
   | { type: "ticket.updated"; ticket: Ticket }
   | { type: "subscription.updated"; subscription: Subscription };
+
+export type DashboardEventType = DashboardEvent["type"];
